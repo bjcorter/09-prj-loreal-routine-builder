@@ -4,15 +4,19 @@ const productsContainer = document.getElementById("productsContainer");
 const chatForm = document.getElementById("chatForm");
 const chatWindow = document.getElementById("chatWindow");
 const selectedProductsList = document.getElementById("selectedProductsList");
+// Add reference to the new search input
+const productSearch = document.getElementById("productSearch");
 
 const workerUrl = "https://loreal-ai-chatbot.bjcorter.workers.dev/";
-
 
 /* Store selected products in an array */
 let selectedProducts = [];
 
 /* Store the chat history as an array of messages */
 let chatHistory = [];
+
+/* Store all loaded products for filtering */
+let allProducts = [];
 
 /* Show initial placeholder until user selects a category */
 productsContainer.innerHTML = `
@@ -23,9 +27,33 @@ productsContainer.innerHTML = `
 
 /* Load product data from JSON file */
 async function loadProducts() {
+  // Only load once and cache for filtering
+  if (allProducts.length > 0) return allProducts;
   const response = await fetch("products.json");
   const data = await response.json();
-  return data.products;
+  allProducts = data.products;
+  return allProducts;
+}
+
+/* Helper functions for localStorage */
+// Save selected products to localStorage
+function saveSelectedProducts() {
+  // Only save the product IDs to keep it simple for beginners
+  const ids = selectedProducts.map((p) => p.id);
+  localStorage.setItem("selectedProducts", JSON.stringify(ids));
+}
+
+// Load selected products from localStorage (returns array of IDs)
+function loadSelectedProductIds() {
+  const data = localStorage.getItem("selectedProducts");
+  if (data) {
+    try {
+      return JSON.parse(data);
+    } catch (e) {
+      return [];
+    }
+  }
+  return [];
 }
 
 /* Create HTML for displaying product cards */
@@ -81,6 +109,7 @@ function displayProducts(products) {
       // Update UI
       displayProducts(products);
       updateSelectedProductsList();
+      saveSelectedProducts(); // <-- Save after change
     });
 
     // Show description overlay when info button is clicked
@@ -114,6 +143,10 @@ function displayProducts(products) {
 function updateSelectedProductsList() {
   if (selectedProducts.length === 0) {
     selectedProductsList.innerHTML = `<div class="placeholder-message">No products selected yet.</div>`;
+    // Hide clear all button if present
+    const clearBtn = document.getElementById("clearAllBtn");
+    if (clearBtn) clearBtn.style.display = "none";
+    saveSelectedProducts();
     return;
   }
   selectedProductsList.innerHTML = selectedProducts
@@ -127,6 +160,44 @@ function updateSelectedProductsList() {
     )
     .join("");
 
+  // Add "Clear All" button if not already present
+  let clearBtn = document.getElementById("clearAllBtn");
+  if (!clearBtn) {
+    clearBtn = document.createElement("button");
+    clearBtn.id = "clearAllBtn";
+    clearBtn.textContent = "Clear All";
+    clearBtn.className = "generate-btn";
+    clearBtn.style.marginTop = "10px";
+    clearBtn.style.background = "#c00";
+    clearBtn.style.color = "#fff";
+    clearBtn.style.fontSize = "16px";
+    clearBtn.style.fontWeight = "400";
+    clearBtn.style.border = "none";
+    clearBtn.style.borderRadius = "8px";
+    clearBtn.style.cursor = "pointer";
+    clearBtn.style.display = "block";
+    // Add event listener for clearing all
+    clearBtn.addEventListener("click", () => {
+      selectedProducts = [];
+      saveSelectedProducts();
+      updateSelectedProductsList();
+      // If a category is selected, re-render grid to update highlights
+      const selectedCategory = categoryFilter.value;
+      if (selectedCategory) {
+        loadProducts().then((products) => {
+          const filtered = products.filter(
+            (p) => p.category === selectedCategory
+          );
+          displayProducts(filtered);
+        });
+      }
+    });
+    // Insert after the selectedProductsList
+    selectedProductsList.parentNode.appendChild(clearBtn);
+  } else {
+    clearBtn.style.display = "block";
+  }
+
   // Add event listeners to remove buttons
   const removeBtns = selectedProductsList.querySelectorAll(
     ".selected-product-remove"
@@ -137,6 +208,7 @@ function updateSelectedProductsList() {
       const parent = btn.closest(".selected-product-item");
       const productId = parent.getAttribute("data-product-id");
       selectedProducts = selectedProducts.filter((p) => p.id != productId);
+      saveSelectedProducts();
       // Refresh UI
       // If a category is selected, re-render grid to update highlights
       const selectedCategory = categoryFilter.value;
@@ -151,19 +223,57 @@ function updateSelectedProductsList() {
       updateSelectedProductsList();
     });
   });
+
+  // Save to localStorage whenever the list is updated
+  saveSelectedProducts();
+}
+
+/* Helper: filter products by category and search */
+function getFilteredProducts() {
+  // Get selected category and search value
+  const selectedCategory = categoryFilter.value;
+  const searchValue = productSearch.value.trim().toLowerCase();
+
+  // Start with all products
+  let filtered = allProducts;
+
+  // Filter by category if selected and not "all"
+  if (selectedCategory && selectedCategory !== "all") {
+    filtered = filtered.filter(
+      (product) => product.category === selectedCategory
+    );
+  }
+
+  // Filter by search if searchValue is not empty
+  if (searchValue) {
+    filtered = filtered.filter((product) => {
+      // Search in name, brand, and description (beginner-friendly)
+      return (
+        product.name.toLowerCase().includes(searchValue) ||
+        product.brand.toLowerCase().includes(searchValue) ||
+        product.description.toLowerCase().includes(searchValue)
+      );
+    });
+  }
+
+  return filtered;
 }
 
 /* Filter and display products when category changes */
 categoryFilter.addEventListener("change", async (e) => {
-  const products = await loadProducts();
-  const selectedCategory = e.target.value;
+  // Ensure products are loaded
+  await loadProducts();
+  // Show filtered products
+  const filteredProducts = getFilteredProducts();
+  displayProducts(filteredProducts);
+});
 
-  /* filter() creates a new array containing only products 
-     where the category matches what the user selected */
-  const filteredProducts = products.filter(
-    (product) => product.category === selectedCategory
-  );
-
+/* Filter and display products when search input changes */
+productSearch.addEventListener("input", async () => {
+  // Ensure products are loaded
+  await loadProducts();
+  // Show filtered products
+  const filteredProducts = getFilteredProducts();
   displayProducts(filteredProducts);
 });
 
@@ -350,5 +460,32 @@ Please create a step-by-step routine using these products. Explain the order and
   chatWindow.scrollTop = chatWindow.scrollHeight;
 });
 
-/* On page load, show selected products (empty) */
-updateSelectedProductsList();
+/* On page load, restore selected products from localStorage */
+window.addEventListener("DOMContentLoaded", async () => {
+  // Load all products first
+  await loadProducts();
+
+  // Get saved product IDs from localStorage
+  const ids = loadSelectedProductIds();
+  if (ids.length > 0) {
+    // Restore selectedProducts array with full product objects
+    selectedProducts = allProducts.filter((p) => ids.includes(p.id));
+    // Update the selected products list in the UI
+    updateSelectedProductsList();
+    // If a category is selected, show the grid with correct highlights
+    const selectedCategory = categoryFilter.value;
+    if (selectedCategory) {
+      const filtered = getFilteredProducts();
+      displayProducts(filtered);
+    }
+  } else {
+    // If nothing is saved, show the empty state
+    updateSelectedProductsList();
+  }
+  // Always show the grid if a category is selected (even if nothing is selected)
+  const selectedCategory = categoryFilter.value;
+  if (selectedCategory) {
+    const filtered = getFilteredProducts();
+    displayProducts(filtered);
+  }
+});
